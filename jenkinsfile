@@ -1,3 +1,4 @@
+```groovy
 pipeline {
 
     agent any
@@ -42,25 +43,43 @@ pipeline {
 
         stage('Install Dependencies') {
             steps {
-                sh 'npm ci'
+                sh '''
+                    set -e
+
+                    echo "===== Backend Dependencies ====="
+                    cd backend
+                    npm ci
+
+                    echo "===== Frontend Dependencies ====="
+                    cd ../frontend
+                    npm ci
+                '''
             }
         }
 
         stage('Test') {
             steps {
-                sh 'npm test'
+                sh '''
+                    set -e
+
+                    echo "===== Backend Test ====="
+                    cd backend
+                    npm test
+
+                    echo "===== Frontend Test ====="
+                    cd ../frontend
+                    npm test
+                '''
             }
         }
 
         stage('SonarQube Analysis') {
             steps {
-
                 withSonarQubeEnv('sonarqube') {
-
                     sh '''
                         sonar-scanner \
                         -Dsonar.projectKey=nodejs-app \
-                        -Dsonar.sources=.
+                        -Dsonar.sources=backend,frontend
                     '''
                 }
             }
@@ -68,8 +87,9 @@ pipeline {
 
         stage('Docker Build') {
             steps {
-
                 sh '''
+                    echo "===== Docker Build ====="
+
                     docker build \
                     -t ${IMAGE_NAME}:${IMAGE_TAG} .
                 '''
@@ -78,8 +98,9 @@ pipeline {
 
         stage('Trivy Scan') {
             steps {
-
                 sh '''
+                    echo "===== Trivy Security Scan ====="
+
                     trivy image \
                     --severity HIGH,CRITICAL \
                     --exit-code 1 \
@@ -90,8 +111,9 @@ pipeline {
 
         stage('Login to ECR') {
             steps {
-
                 sh '''
+                    echo "===== Login to AWS ECR ====="
+
                     aws ecr get-login-password \
                     --region ${AWS_REGION} | \
                     docker login \
@@ -103,8 +125,9 @@ pipeline {
 
         stage('Push Image to ECR') {
             steps {
-
                 sh '''
+                    echo "===== Push Image to ECR ====="
+
                     docker push ${IMAGE_NAME}:${IMAGE_TAG}
                 '''
             }
@@ -112,19 +135,23 @@ pipeline {
 
         stage('Update Kubeconfig') {
             steps {
-
                 sh '''
+                    echo "===== Update EKS Kubeconfig ====="
+
                     aws eks update-kubeconfig \
                     --region ${AWS_REGION} \
                     --name ${EKS_CLUSTER}
+
+                    kubectl get nodes
                 '''
             }
         }
 
         stage('Helm Deploy') {
             steps {
-
                 sh '''
+                    echo "===== Helm Deployment ====="
+
                     helm upgrade --install ${HELM_RELEASE} ${HELM_CHART} \
                     --namespace nodejs-app \
                     --create-namespace \
@@ -136,15 +163,16 @@ pipeline {
 
         stage('Verify Deployment') {
             steps {
-
                 sh '''
-                    kubectl get pods \
-                    -n nodejs-app
+                    echo "===== Kubernetes Pods ====="
+                    kubectl get pods -n nodejs-app
 
-                    kubectl get svc \
-                    -n nodejs-app
+                    echo "===== Kubernetes Services ====="
+                    kubectl get svc -n nodejs-app
 
-                    kubectl rollout status deployment/${HELM_RELEASE} \
+                    echo "===== Deployment Status ====="
+                    kubectl rollout status \
+                    deployment/${HELM_RELEASE} \
                     -n nodejs-app
                 '''
             }
@@ -154,11 +182,16 @@ pipeline {
     post {
 
         success {
+            echo '======================================'
             echo 'Deployment successful!'
+            echo '======================================'
         }
 
         failure {
+            echo '======================================'
             echo 'Pipeline failed. Check the failed stage.'
+            echo '======================================'
         }
     }
 }
+```
