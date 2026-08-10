@@ -11,9 +11,10 @@ pipeline {
 
         FRONTEND_REPO = 'frontend'
         BACKEND_REPO  = 'backend'
-        DATABASE_REPO = 'database'
 
         IMAGE_TAG = "${BUILD_NUMBER}"
+
+        AWS_CREDENTIALS = 'aws-ecr-credentials'
     }
 
     stages {
@@ -37,24 +38,32 @@ pipeline {
 
                     echo "===== Git ====="
                     git --version
+
+                    echo "===== Current Directory ====="
+                    pwd
+
+                    echo "===== Project Structure ====="
+                    ls -la
                 '''
             }
         }
 
         stage('AWS Authentication') {
             steps {
+
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: 'aws-ecr-credentials']
+                     credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
+
                     sh '''
                         set -e
 
-                        echo "===== AWS Identity ====="
+                        echo "===== AWS Account ====="
 
                         aws sts get-caller-identity
 
-                        echo "===== ECR Login ====="
+                        echo "===== Login to ECR ====="
 
                         aws ecr get-login-password \
                             --region ${AWS_REGION} | \
@@ -77,6 +86,8 @@ pipeline {
                     docker build \
                         -t ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG} \
                         ./frontend
+
+                    echo "Frontend build completed"
                 '''
             }
         }
@@ -91,20 +102,8 @@ pipeline {
                     docker build \
                         -t ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG} \
                         ./backend
-                '''
-            }
-        }
 
-        stage('Build Database Image') {
-            steps {
-                sh '''
-                    set -e
-
-                    echo "===== Building Database ====="
-
-                    docker build \
-                        -t ${ECR_REGISTRY}/${DATABASE_REPO}:${IMAGE_TAG} \
-                        ./database
+                    echo "Backend build completed"
                 '''
             }
         }
@@ -112,14 +111,47 @@ pipeline {
         stage('Docker Images') {
             steps {
                 sh '''
-                    echo "===== Local Docker Images ====="
+                    echo "===== Docker Images ====="
 
-                    docker images | grep ${ECR_REGISTRY}
+                    docker images | grep "${ECR_REGISTRY}" || true
                 '''
             }
         }
 
-        stage('Push Images to ECR') {
+        stage('Trivy Scan') {
+            steps {
+                sh '''
+                    set +e
+
+                    echo "===== Trivy Frontend Scan ====="
+
+                    trivy image \
+                        --severity HIGH,CRITICAL \
+                        --exit-code 1 \
+                        ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
+
+                    FRONTEND_STATUS=$?
+
+                    echo "===== Trivy Backend Scan ====="
+
+                    trivy image \
+                        --severity HIGH,CRITICAL \
+                        --exit-code 1 \
+                        ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
+
+                    BACKEND_STATUS=$?
+
+                    if [ $FRONTEND_STATUS -ne 0 ] || [ $BACKEND_STATUS -ne 0 ]; then
+                        echo "HIGH/CRITICAL vulnerabilities found"
+                        exit 1
+                    fi
+
+                    echo "Trivy scan completed successfully"
+                '''
+            }
+        }
+
+        stage('Push Frontend to ECR') {
             steps {
                 sh '''
                     set -e
@@ -128,47 +160,51 @@ pipeline {
 
                     docker push \
                         ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
+                '''
+            }
+        }
 
+        stage('Push Backend to ECR') {
+            steps {
+                sh '''
+                    set -e
 
                     echo "===== Push Backend ====="
 
                     docker push \
                         ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
-
-
-                    echo "===== Push Database ====="
-
-                    docker push \
-                        ${ECR_REGISTRY}/${DATABASE_REPO}:${IMAGE_TAG}
                 '''
             }
         }
 
-        stage('Verify ECR') {
+        stage('Verify ECR Images') {
             steps {
-                sh '''
-                    set -e
 
-                    echo "===== Frontend ECR ====="
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
 
-                    aws ecr describe-images \
-                        --repository-name ${FRONTEND_REPO} \
-                        --region ${AWS_REGION}
+                    sh '''
+                        set -e
 
+                        echo "===== Frontend ECR Image ====="
 
-                    echo "===== Backend ECR ====="
+                        aws ecr describe-images \
+                            --repository-name ${FRONTEND_REPO} \
+                            --region ${AWS_REGION} \
+                            --query 'imageDetails[*].imageTags' \
+                            --output table
 
-                    aws ecr describe-images \
-                        --repository-name ${BACKEND_REPO} \
-                        --region ${AWS_REGION}
+                        echo "===== Backend ECR Image ====="
 
-
-                    echo "===== Database ECR ====="
-
-                    aws ecr describe-images \
-                        --repository-name ${DATABASE_REPO} \
-                        --region ${AWS_REGION}
-                '''
+                        aws ecr describe-images \
+                            --repository-name ${BACKEND_REPO} \
+                            --region ${AWS_REGION} \
+                            --query 'imageDetails[*].imageTags' \
+                            --output table
+                    '''
+                }
             }
         }
     }
@@ -178,8 +214,10 @@ pipeline {
         success {
             echo '''
             ==========================================
-            BUILD SUCCESSFUL
-            Docker images pushed to AWS ECR
+            PIPELINE SUCCESS
+            ==========================================
+            Frontend image pushed to ECR
+            Backend image pushed to ECR
             ==========================================
             '''
         }
@@ -187,9 +225,17 @@ pipeline {
         failure {
             echo '''
             ==========================================
-            BUILD FAILED
-            Check Jenkins Console Output
+            PIPELINE FAILED
             ==========================================
+            Check the failed Jenkins stage.
+            ==========================================
+            '''
+        }
+
+        always {
+            sh '''
+                echo "===== Cleaning Docker Login ====="
+                docker logout ${ECR_REGISTRY} || true
             '''
         }
     }
