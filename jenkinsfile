@@ -1,240 +1,249 @@
-```groovy
 pipeline {
 
-    agent any
+```
+agent any
 
-    environment {
+environment {
 
-        AWS_REGION = 'ap-south-1'
-        AWS_ACCOUNT_ID = '424957012022'
+    AWS_REGION = 'ap-south-1'
+    AWS_ACCOUNT_ID = '424957012022'
 
-        ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+    ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-        FRONTEND_REPO = 'frontend'
-        BACKEND_REPO  = 'backend'
+    FRONTEND_REPO = 'frontend'
+    BACKEND_REPO = 'backend'
 
-        IMAGE_TAG = "${BUILD_NUMBER}"
+    IMAGE_TAG = "${BUILD_NUMBER}"
 
-        AWS_CREDENTIALS = 'aws-ecr-credentials'
-    }
+    AWS_CREDENTIALS = 'aws-ecr-credentials'
+}
 
-    stages {
+stages {
 
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
-
-        stage('Check Tools') {
-            steps {
-                sh '''
-                    set -e
-
-                    echo "===== Docker ====="
-                    docker --version
-
-                    echo "===== AWS CLI ====="
-                    aws --version
-
-                    echo "===== Git ====="
-                    git --version
-
-                    echo "===== Trivy ====="
-                    trivy --version
-
-                    echo "===== Current Directory ====="
-                    pwd
-
-                    echo "===== Project Structure ====="
-                    ls -la
-                '''
-            }
-        }
-
-        stage('AWS Authentication') {
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo "===== AWS Account ====="
-
-                        aws sts get-caller-identity
-
-                        echo "===== Login to ECR ====="
-
-                        aws ecr get-login-password \
-                            --region ${AWS_REGION} | \
-                        docker login \
-                            --username AWS \
-                            --password-stdin \
-                            ${ECR_REGISTRY}
-                    '''
-                }
-            }
-        }
-
-        stage('Build Frontend Image') {
-            steps {
-                sh '''
-                    set -e
-
-                    echo "===== Building Frontend ====="
-
-                    docker build \
-                        -t ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG} \
-                        ./frontend
-
-                    echo "Frontend build completed"
-                '''
-            }
-        }
-
-        stage('Build Backend Image') {
-            steps {
-                sh '''
-                    set -e
-
-                    echo "===== Building Backend ====="
-
-                    docker build \
-                        -t ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG} \
-                        ./backend
-
-                    echo "Backend build completed"
-                '''
-            }
-        }
-
-        stage('Docker Images') {
-            steps {
-                sh '''
-                    echo "===== Docker Images ====="
-
-                    docker images | grep "${ECR_REGISTRY}" || true
-                '''
-            }
-        }
-
-        stage('Trivy Scan') {
-            steps {
-                sh '''
-                    echo "===== Trivy Frontend Scan ====="
-
-                    trivy image \
-                        --severity HIGH,CRITICAL \
-                        --exit-code 0 \
-                        ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
-
-                    echo "===== Trivy Backend Scan ====="
-
-                    trivy image \
-                        --severity HIGH,CRITICAL \
-                        --exit-code 0 \
-                        ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
-
-                    echo "=========================================="
-                    echo "Trivy scan completed."
-                    echo "HIGH/CRITICAL vulnerabilities are reported."
-                    echo "Pipeline will continue to ECR push."
-                    echo "=========================================="
-                '''
-            }
-        }
-
-        stage('Push Frontend to ECR') {
-            steps {
-                sh '''
-                    set -e
-
-                    echo "===== Push Frontend ====="
-
-                    docker push \
-                        ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
-                '''
-            }
-        }
-
-        stage('Push Backend to ECR') {
-            steps {
-                sh '''
-                    set -e
-
-                    echo "===== Push Backend ====="
-
-                    docker push \
-                        ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
-                '''
-            }
-        }
-
-        stage('Verify ECR Images') {
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo "===== Frontend ECR Image ====="
-
-                        aws ecr describe-images \
-                            --repository-name ${FRONTEND_REPO} \
-                            --region ${AWS_REGION} \
-                            --query 'imageDetails[*].imageTags' \
-                            --output table
-
-                        echo "===== Backend ECR Image ====="
-
-                        aws ecr describe-images \
-                            --repository-name ${BACKEND_REPO} \
-                            --region ${AWS_REGION} \
-                            --query 'imageDetails[*].imageTags' \
-                            --output table
-                    '''
-                }
-            }
+    stage('Checkout') {
+        steps {
+            checkout scm
         }
     }
 
-    post {
-
-        success {
-            echo '''
-            ==========================================
-            PIPELINE SUCCESS
-            ==========================================
-            Frontend image pushed to ECR
-            Backend image pushed to ECR
-            ==========================================
-            '''
-        }
-
-        failure {
-            echo '''
-            ==========================================
-            PIPELINE FAILED
-            ==========================================
-            Check the failed Jenkins stage.
-            ==========================================
-            '''
-        }
-
-        always {
+    stage('Check Tools') {
+        steps {
             sh '''
-                echo "===== Cleaning Docker Login ====="
-                docker logout ${ECR_REGISTRY} || true
+                set -e
+
+                echo "===== Docker ====="
+                docker --version
+
+                echo "===== AWS CLI ====="
+                aws --version
+
+                echo "===== Git ====="
+                git --version
+
+                echo "===== Trivy ====="
+                trivy --version
+
+                echo "===== Current Directory ====="
+                pwd
+
+                echo "===== Project Structure ====="
+                ls -la
             '''
+        }
+    }
+
+    stage('AWS Authentication') {
+        steps {
+
+            withCredentials([
+                [$class: 'AmazonWebServicesCredentialsBinding',
+                 credentialsId: "${AWS_CREDENTIALS}"]
+            ]) {
+
+                sh '''
+                    set -e
+
+                    echo "===== AWS Account ====="
+                    aws sts get-caller-identity
+
+                    echo "===== Login to ECR ====="
+
+                    aws ecr get-login-password \
+                        --region ${AWS_REGION} | \
+                    docker login \
+                        --username AWS \
+                        --password-stdin \
+                        ${ECR_REGISTRY}
+                '''
+            }
+        }
+    }
+
+    stage('Build Frontend Image') {
+        steps {
+            sh '''
+                set -e
+
+                echo "===== Building Frontend ====="
+
+                docker build \
+                    -t ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG} \
+                    ./frontend
+
+                echo "Frontend build completed"
+            '''
+        }
+    }
+
+    stage('Build Backend Image') {
+        steps {
+            sh '''
+                set -e
+
+                echo "===== Building Backend ====="
+
+                docker build \
+                    -t ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG} \
+                    ./backend
+
+                echo "Backend build completed"
+            '''
+        }
+    }
+
+    stage('Docker Images') {
+        steps {
+            sh '''
+                echo "===== Docker Images ====="
+
+                docker images | grep "${ECR_REGISTRY}" || true
+            '''
+        }
+    }
+
+    stage('Trivy Scan') {
+        steps {
+            sh '''
+                echo "===== Trivy Frontend Scan ====="
+
+                trivy image \
+                    --severity HIGH,CRITICAL \
+                    --exit-code 0 \
+                    ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
+
+                echo "===== Trivy Backend Scan ====="
+
+                trivy image \
+                    --severity HIGH,CRITICAL \
+                    --exit-code 0 \
+                    ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
+
+                echo "=========================================="
+                echo "Trivy scan completed"
+                echo "HIGH/CRITICAL vulnerabilities are reported"
+                echo "Pipeline will continue to ECR push"
+                echo "=========================================="
+            '''
+        }
+    }
+
+    stage('Push Frontend to ECR') {
+        steps {
+            sh '''
+                set -e
+
+                echo "===== Push Frontend ====="
+
+                docker push \
+                    ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
+            '''
+        }
+    }
+
+    stage('Push Backend to ECR') {
+        steps {
+            sh '''
+                set -e
+
+                echo "===== Push Backend ====="
+
+                docker push \
+                    ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
+            '''
+        }
+    }
+
+    stage('Verify ECR Images') {
+        steps {
+
+            withCredentials([
+                [$class: 'AmazonWebServicesCredentialsBinding',
+                 credentialsId: "${AWS_CREDENTIALS}"]
+            ]) {
+
+                sh '''
+                    set -e
+
+                    echo "===== Frontend ECR Image ====="
+
+                    aws ecr describe-images \
+                        --repository-name ${FRONTEND_REPO} \
+                        --region ${AWS_REGION} \
+                        --query 'imageDetails[*].imageTags' \
+                        --output table
+
+                    echo "===== Backend ECR Image ====="
+
+                    aws ecr describe-images \
+                        --repository-name ${BACKEND_REPO} \
+                        --region ${AWS_REGION} \
+                        --query 'imageDetails[*].imageTags' \
+                        --output table
+                '''
+            }
         }
     }
 }
+
+post {
+
+    success {
+        echo '''
 ```
+
+==========================================
+PIPELINE SUCCESS
+================
+
+Frontend image pushed to ECR
+Backend image pushed to ECR
+===========================
+
+'''
+}
+
+```
+    failure {
+        echo '''
+```
+
+==========================================
+PIPELINE FAILED
+===============
+
+# Check the failed Jenkins stage.
+
+'''
+}
+
+```
+    always {
+        sh '''
+            echo "===== Cleaning Docker Login ====="
+            docker logout ${ECR_REGISTRY} || true
+        '''
+    }
+}
+```
+
+}
