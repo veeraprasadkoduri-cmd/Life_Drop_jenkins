@@ -1,18 +1,14 @@
 pipeline {
-
-```
 agent any
 
+```
 environment {
-
     AWS_REGION = 'ap-south-1'
     AWS_ACCOUNT_ID = '424957012022'
-
     ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
     FRONTEND_REPO = 'frontend'
     BACKEND_REPO = 'backend'
-
     IMAGE_TAG = "${BUILD_NUMBER}"
 
     AWS_CREDENTIALS = 'aws-ecr-credentials'
@@ -30,7 +26,6 @@ stages {
         steps {
             sh '''
                 set -e
-
                 echo "===== Docker ====="
                 docker --version
 
@@ -43,10 +38,8 @@ stages {
                 echo "===== Trivy ====="
                 trivy --version
 
-                echo "===== Current Directory ====="
-                pwd
-
                 echo "===== Project Structure ====="
+                pwd
                 ls -la
             '''
         }
@@ -54,12 +47,10 @@ stages {
 
     stage('AWS Authentication') {
         steps {
-
             withCredentials([
                 [$class: 'AmazonWebServicesCredentialsBinding',
                  credentialsId: "${AWS_CREDENTIALS}"]
             ]) {
-
                 sh '''
                     set -e
 
@@ -67,7 +58,6 @@ stages {
                     aws sts get-caller-identity
 
                     echo "===== Login to ECR ====="
-
                     aws ecr get-login-password \
                         --region ${AWS_REGION} | \
                     docker login \
@@ -83,14 +73,11 @@ stages {
         steps {
             sh '''
                 set -e
-
                 echo "===== Building Frontend ====="
 
                 docker build \
                     -t ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG} \
                     ./frontend
-
-                echo "Frontend build completed"
             '''
         }
     }
@@ -99,14 +86,11 @@ stages {
         steps {
             sh '''
                 set -e
-
                 echo "===== Building Backend ====="
 
                 docker build \
                     -t ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG} \
                     ./backend
-
-                echo "Backend build completed"
             '''
         }
     }
@@ -115,7 +99,6 @@ stages {
         steps {
             sh '''
                 echo "===== Docker Images ====="
-
                 docker images | grep "${ECR_REGISTRY}" || true
             '''
         }
@@ -124,25 +107,21 @@ stages {
     stage('Trivy Scan') {
         steps {
             sh '''
-                echo "===== Trivy Frontend Scan ====="
+                echo "===== Frontend Trivy Scan ====="
 
                 trivy image \
                     --severity HIGH,CRITICAL \
                     --exit-code 0 \
                     ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
 
-                echo "===== Trivy Backend Scan ====="
+                echo "===== Backend Trivy Scan ====="
 
                 trivy image \
                     --severity HIGH,CRITICAL \
                     --exit-code 0 \
                     ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
 
-                echo "=========================================="
-                echo "Trivy scan completed"
-                echo "HIGH/CRITICAL vulnerabilities are reported"
-                echo "Pipeline will continue to ECR push"
-                echo "=========================================="
+                echo "===== Trivy Scan Completed ====="
             '''
         }
     }
@@ -151,7 +130,6 @@ stages {
         steps {
             sh '''
                 set -e
-
                 echo "===== Push Frontend ====="
 
                 docker push \
@@ -164,7 +142,6 @@ stages {
         steps {
             sh '''
                 set -e
-
                 echo "===== Push Backend ====="
 
                 docker push \
@@ -175,12 +152,10 @@ stages {
 
     stage('Verify ECR Images') {
         steps {
-
             withCredentials([
                 [$class: 'AmazonWebServicesCredentialsBinding',
                  credentialsId: "${AWS_CREDENTIALS}"]
             ]) {
-
                 sh '''
                     set -e
 
@@ -208,35 +183,20 @@ stages {
 post {
 
     success {
-        echo '''
-```
+        echo "=========================================="
+        echo "PIPELINE SUCCESS"
+        echo "Frontend image pushed to ECR"
+        echo "Backend image pushed to ECR"
+        echo "=========================================="
+    }
 
-==========================================
-PIPELINE SUCCESS
-================
-
-Frontend image pushed to ECR
-Backend image pushed to ECR
-===========================
-
-'''
-}
-
-```
     failure {
-        echo '''
-```
+        echo "=========================================="
+        echo "PIPELINE FAILED"
+        echo "Check the failed Jenkins stage."
+        echo "=========================================="
+    }
 
-==========================================
-PIPELINE FAILED
-===============
-
-# Check the failed Jenkins stage.
-
-'''
-}
-
-```
     always {
         sh '''
             echo "===== Cleaning Docker Login ====="
