@@ -2,10 +2,6 @@ pipeline {
 
     agent any
 
-    options {
-        skipDefaultCheckout(true)
-    }
-
     environment {
         AWS_REGION     = 'ap-south-1'
         AWS_ACCOUNT_ID = '424957012022'
@@ -22,12 +18,14 @@ pipeline {
 
         stage('Checkout') {
             steps {
+                deleteDir()
+
                 git branch: 'main',
                     url: 'https://github.com/veeraprasadkoduri-cmd/Life_Drop_jenkins.git'
             }
         }
 
-        stage('Login to ECR') {
+        stage('AWS & ECR Login') {
             steps {
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding',
@@ -36,16 +34,18 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "Checking AWS credentials..."
+                        echo "Checking AWS identity..."
                         aws sts get-caller-identity
 
-                        echo "Logging in to ECR..."
+                        echo "Logging into ECR..."
 
                         aws ecr get-login-password \
-                            --region ${AWS_REGION} | \
+                            --region "$AWS_REGION" | \
                         docker login \
                             --username AWS \
-                            --password-stdin ${ECR_REGISTRY}
+                            --password-stdin "$ECR_REGISTRY"
+
+                        echo "ECR login successful."
                     '''
                 }
             }
@@ -60,25 +60,37 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "Checking backend ECR repository..."
+                        echo "Checking backend repository..."
 
-                        aws ecr describe-repositories \
-                            --repository-names ${BACKEND_REPO} \
-                            --region ${AWS_REGION} \
-                        || \
-                        aws ecr create-repository \
-                            --repository-name ${BACKEND_REPO} \
-                            --region ${AWS_REGION}
+                        if aws ecr describe-repositories \
+                            --repository-names "$BACKEND_REPO" \
+                            --region "$AWS_REGION" >/dev/null 2>&1
+                        then
+                            echo "Backend repository already exists."
+                        else
+                            echo "Creating backend repository..."
 
-                        echo "Checking frontend ECR repository..."
+                            aws ecr create-repository \
+                                --repository-name "$BACKEND_REPO" \
+                                --region "$AWS_REGION"
+                        fi
 
-                        aws ecr describe-repositories \
-                            --repository-names ${FRONTEND_REPO} \
-                            --region ${AWS_REGION} \
-                        || \
-                        aws ecr create-repository \
-                            --repository-name ${FRONTEND_REPO} \
-                            --region ${AWS_REGION}
+
+                        echo "Checking frontend repository..."
+
+                        if aws ecr describe-repositories \
+                            --repository-names "$FRONTEND_REPO" \
+                            --region "$AWS_REGION" >/dev/null 2>&1
+                        then
+                            echo "Frontend repository already exists."
+                        else
+                            echo "Creating frontend repository..."
+
+                            aws ecr create-repository \
+                                --repository-name "$FRONTEND_REPO" \
+                                --region "$AWS_REGION"
+                        fi
+
 
                         echo "ECR repositories are ready."
                     '''
@@ -91,11 +103,11 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "Building backend image..."
+                    echo "Building backend..."
 
                     docker build \
-                        -t ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG} \
-                        -t ${ECR_REGISTRY}/${BACKEND_REPO}:latest \
+                        -t "$ECR_REGISTRY/$BACKEND_REPO:$IMAGE_TAG" \
+                        -t "$ECR_REGISTRY/$BACKEND_REPO:latest" \
                         ./backend
                 '''
             }
@@ -106,44 +118,44 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "Building frontend image..."
+                    echo "Building frontend..."
 
                     docker build \
-                        -t ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG} \
-                        -t ${ECR_REGISTRY}/${FRONTEND_REPO}:latest \
+                        -t "$ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG" \
+                        -t "$ECR_REGISTRY/$FRONTEND_REPO:latest" \
                         ./frontend
                 '''
             }
         }
 
-        stage('Push Backend to ECR') {
+        stage('Push Backend Image') {
             steps {
                 sh '''
                     set -e
 
-                    echo "Pushing backend image..."
+                    echo "Pushing backend..."
 
                     docker push \
-                        ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
+                        "$ECR_REGISTRY/$BACKEND_REPO:$IMAGE_TAG"
 
                     docker push \
-                        ${ECR_REGISTRY}/${BACKEND_REPO}:latest
+                        "$ECR_REGISTRY/$BACKEND_REPO:latest"
                 '''
             }
         }
 
-        stage('Push Frontend to ECR') {
+        stage('Push Frontend Image') {
             steps {
                 sh '''
                     set -e
 
-                    echo "Pushing frontend image..."
+                    echo "Pushing frontend..."
 
                     docker push \
-                        ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
+                        "$ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG"
 
                     docker push \
-                        ${ECR_REGISTRY}/${FRONTEND_REPO}:latest
+                        "$ECR_REGISTRY/$FRONTEND_REPO:latest"
                 '''
             }
         }
@@ -153,11 +165,15 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "Deploying application..."
+                    echo "Stopping old containers..."
 
                     docker compose down || true
 
+                    echo "Pulling latest ECR images..."
+
                     docker compose pull
+
+                    echo "Starting application..."
 
                     docker compose up -d
                 '''
@@ -167,10 +183,16 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 sh '''
-                    echo "===== Docker Compose ====="
+                    echo "=============================="
+                    echo "Docker Compose Status"
+                    echo "=============================="
+
                     docker compose ps
 
-                    echo "===== Docker Containers ====="
+                    echo "=============================="
+                    echo "Running Containers"
+                    echo "=============================="
+
                     docker ps
                 '''
             }
@@ -180,16 +202,21 @@ pipeline {
     post {
 
         success {
-            echo 'LifeDrop deployment completed successfully.'
+            echo '======================================'
+            echo 'LifeDrop deployment SUCCESSFUL'
+            echo '======================================'
         }
 
         failure {
-            echo 'LifeDrop deployment failed. Check the failed stage above.'
+            echo '======================================'
+            echo 'LifeDrop deployment FAILED'
+            echo 'Check the failed stage above.'
+            echo '======================================'
         }
 
         always {
             sh '''
-                docker logout ${ECR_REGISTRY} || true
+                docker logout "$ECR_REGISTRY" || true
             '''
         }
     }
