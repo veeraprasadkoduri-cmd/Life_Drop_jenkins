@@ -19,7 +19,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 git branch: 'main',
-                    url: 'https://github.com/veeraprasadkoduri-cmd/LifeDrop-Jenkins.git'
+                    url: 'https://github.com/veeraprasadkoduri-cmd/Life_Drop_jenkins.git'
             }
         }
 
