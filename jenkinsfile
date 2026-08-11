@@ -2,8 +2,12 @@ pipeline {
 
     agent any
 
+    options {
+        skipDefaultCheckout(true)
+    }
+
     environment {
-        AWS_REGION = 'ap-south-1'
+        AWS_REGION     = 'ap-south-1'
         AWS_ACCOUNT_ID = '424957012022'
 
         ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
@@ -30,13 +34,17 @@ pipeline {
                      credentialsId: 'aws-ecr-credentials']
                 ]) {
                     sh '''
+                        set -e
+
+                        echo "Checking AWS credentials..."
                         aws sts get-caller-identity
 
+                        echo "Logging in to ECR..."
                         aws ecr get-login-password \
-                        --region ${AWS_REGION} | \
+                            --region ${AWS_REGION} | \
                         docker login \
-                        --username AWS \
-                        --password-stdin ${ECR_REGISTRY}
+                            --username AWS \
+                            --password-stdin ${ECR_REGISTRY}
                     '''
                 }
             }
@@ -45,10 +53,12 @@ pipeline {
         stage('Build Backend Image') {
             steps {
                 sh '''
+                    set -e
+
                     docker build \
-                    -t ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG} \
-                    -t ${ECR_REGISTRY}/${BACKEND_REPO}:latest \
-                    ./backend
+                        -t ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG} \
+                        -t ${ECR_REGISTRY}/${BACKEND_REPO}:latest \
+                        ./backend
                 '''
             }
         }
@@ -56,10 +66,12 @@ pipeline {
         stage('Build Frontend Image') {
             steps {
                 sh '''
+                    set -e
+
                     docker build \
-                    -t ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG} \
-                    -t ${ECR_REGISTRY}/${FRONTEND_REPO}:latest \
-                    ./frontend
+                        -t ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG} \
+                        -t ${ECR_REGISTRY}/${FRONTEND_REPO}:latest \
+                        ./frontend
                 '''
             }
         }
@@ -67,11 +79,13 @@ pipeline {
         stage('Push Backend to ECR') {
             steps {
                 sh '''
-                    docker push \
-                    ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
+                    set -e
 
                     docker push \
-                    ${ECR_REGISTRY}/${BACKEND_REPO}:latest
+                        ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
+
+                    docker push \
+                        ${ECR_REGISTRY}/${BACKEND_REPO}:latest
                 '''
             }
         }
@@ -79,11 +93,13 @@ pipeline {
         stage('Push Frontend to ECR') {
             steps {
                 sh '''
-                    docker push \
-                    ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
+                    set -e
 
                     docker push \
-                    ${ECR_REGISTRY}/${FRONTEND_REPO}:latest
+                        ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
+
+                    docker push \
+                        ${ECR_REGISTRY}/${FRONTEND_REPO}:latest
                 '''
             }
         }
@@ -91,6 +107,8 @@ pipeline {
         stage('Deploy Application') {
             steps {
                 sh '''
+                    set -e
+
                     docker compose down || true
 
                     docker compose pull
@@ -103,10 +121,10 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 sh '''
-                    echo "Running containers:"
+                    echo "===== Docker Compose ====="
                     docker compose ps
 
-                    echo "Docker containers:"
+                    echo "===== Docker Containers ====="
                     docker ps
                 '''
             }
@@ -114,8 +132,18 @@ pipeline {
     }
 
     post {
+        success {
+            echo 'LifeDrop deployment completed successfully.'
+        }
+
+        failure {
+            echo 'LifeDrop deployment failed. Check the stage above for the error.'
+        }
+
         always {
-            echo "LifeDrop deployment pipeline completed."
+            sh '''
+                docker logout ${ECR_REGISTRY} || true
+            '''
         }
     }
 }
