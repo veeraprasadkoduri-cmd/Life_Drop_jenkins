@@ -40,6 +40,7 @@ pipeline {
                         aws sts get-caller-identity
 
                         echo "Logging in to ECR..."
+
                         aws ecr get-login-password \
                             --region ${AWS_REGION} | \
                         docker login \
@@ -50,10 +51,47 @@ pipeline {
             }
         }
 
+        stage('Create ECR Repositories') {
+            steps {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-ecr-credentials']
+                ]) {
+                    sh '''
+                        set -e
+
+                        echo "Checking backend ECR repository..."
+
+                        aws ecr describe-repositories \
+                            --repository-names ${BACKEND_REPO} \
+                            --region ${AWS_REGION} \
+                        || \
+                        aws ecr create-repository \
+                            --repository-name ${BACKEND_REPO} \
+                            --region ${AWS_REGION}
+
+                        echo "Checking frontend ECR repository..."
+
+                        aws ecr describe-repositories \
+                            --repository-names ${FRONTEND_REPO} \
+                            --region ${AWS_REGION} \
+                        || \
+                        aws ecr create-repository \
+                            --repository-name ${FRONTEND_REPO} \
+                            --region ${AWS_REGION}
+
+                        echo "ECR repositories are ready."
+                    '''
+                }
+            }
+        }
+
         stage('Build Backend Image') {
             steps {
                 sh '''
                     set -e
+
+                    echo "Building backend image..."
 
                     docker build \
                         -t ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG} \
@@ -68,6 +106,8 @@ pipeline {
                 sh '''
                     set -e
 
+                    echo "Building frontend image..."
+
                     docker build \
                         -t ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG} \
                         -t ${ECR_REGISTRY}/${FRONTEND_REPO}:latest \
@@ -80,6 +120,8 @@ pipeline {
             steps {
                 sh '''
                     set -e
+
+                    echo "Pushing backend image..."
 
                     docker push \
                         ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
@@ -95,6 +137,8 @@ pipeline {
                 sh '''
                     set -e
 
+                    echo "Pushing frontend image..."
+
                     docker push \
                         ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
 
@@ -108,6 +152,8 @@ pipeline {
             steps {
                 sh '''
                     set -e
+
+                    echo "Deploying application..."
 
                     docker compose down || true
 
@@ -132,12 +178,13 @@ pipeline {
     }
 
     post {
+
         success {
             echo 'LifeDrop deployment completed successfully.'
         }
 
         failure {
-            echo 'LifeDrop deployment failed. Check the stage above for the error.'
+            echo 'LifeDrop deployment failed. Check the failed stage above.'
         }
 
         always {
