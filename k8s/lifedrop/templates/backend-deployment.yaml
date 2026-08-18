@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lifedrop-backend
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  selector:
+    matchLabels:
+      app: lifedrop-backend
+  template:
+    metadata:
+      labels:
+        app: lifedrop-backend
+    spec:
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          ports:
+            - containerPort: 5000
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "{{ .Values.backend.env.PORT }}"
+            - name: NODE_ENV
+              value: "{{ .Values.backend.env.NODE_ENV }}"
+            - name: MONGO_URI
+              value: "{{ .Values.backend.env.MONGO_URI }}"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: lifedrop-backend-secret
+                  key: JWT_SECRET
+          readinessProbe:
+            tcpSocket:
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 5000
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

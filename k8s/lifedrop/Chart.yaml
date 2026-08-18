@@ -1,0 +1,6 @@
+apiVersion: v2
+name: lifedrop
+description: LifeDrop 3-Tier Application Helm Chart
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

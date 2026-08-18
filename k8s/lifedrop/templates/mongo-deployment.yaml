@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lifedrop-mongo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lifedrop-mongo
+  template:
+    metadata:
+      labels:
+        app: lifedrop-mongo
+    spec:
+      containers:
+        - name: mongo
+          image: "{{ .Values.mongodb.image.repository }}:{{ .Values.mongodb.image.tag }}"
+          imagePullPolicy: {{ .Values.mongodb.image.pullPolicy }}
+          ports:
+            - containerPort: 27017
+              protocol: TCP
+          volumeMounts:
+            - name: mongo-storage
+              mountPath: /data/db
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+      volumes:
+        - name: mongo-storage
+          persistentVolumeClaim:
+            claimName: lifedrop-mongo-pvc
