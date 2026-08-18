@@ -27,31 +27,70 @@ pipeline {
             }
         }
 
-        stage('Deploy') {
+        stage('Push Docker Images') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        echo "$DOCKER_PASSWORD" | docker login \
+                          -u "$DOCKER_USERNAME" \
+                          --password-stdin
+
+                        echo "Pushing Backend..."
+                        docker push veeradockerhub/lifedrop-backend:latest
+
+                        echo "Pushing Frontend..."
+                        docker push veeradockerhub/lifedrop-frontend:latest
+
+                        docker logout
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to EKS') {
             steps {
                 sh '''
                     set -e
 
-                    echo "Stopping old containers..."
-                    docker compose down || true
+                    echo "Checking EKS access..."
+                    kubectl get nodes
 
-                    echo "Starting application..."
-                    docker compose up -d
+                    echo "Deploying LifeDrop using Helm..."
 
-                    echo "Deployment completed."
+                    helm upgrade --install lifedrop k8s/lifedrop \
+                        --namespace lifedrop \
+                        --create-namespace \
+                        --wait \
+                        --timeout 10m
+
+                    echo "Helm deployment completed."
                 '''
             }
         }
 
-        stage('Verify') {
+        stage('Verify Deployment') {
             steps {
                 sh '''
-                    echo "Docker Compose Status:"
-                    docker compose ps
+                    set -e
+
+                    echo "Pods:"
+                    kubectl get pods -n lifedrop -o wide
 
                     echo ""
-                    echo "Running Containers:"
-                    docker ps
+                    echo "Services:"
+                    kubectl get svc -n lifedrop
+
+                    echo ""
+                    echo "Deployments:"
+                    kubectl get deployments -n lifedrop
                 '''
             }
         }
@@ -60,11 +99,11 @@ pipeline {
     post {
 
         success {
-            echo 'LifeDrop deployment SUCCESSFUL'
+            echo 'LifeDrop EKS deployment SUCCESSFUL'
         }
 
         failure {
-            echo 'LifeDrop deployment FAILED'
+            echo 'LifeDrop EKS deployment FAILED'
         }
     }
 }
