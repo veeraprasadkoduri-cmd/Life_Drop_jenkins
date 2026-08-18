@@ -1,6 +1,14 @@
 pipeline {
-
     agent any
+
+    environment {
+        DOCKER_USER = 'veeradockerhub'
+
+        BACKEND_IMAGE  = 'veeradockerhub/lifedrop-backend:latest'
+        FRONTEND_IMAGE = 'veeradockerhub/lifedrop-frontend:latest'
+
+        NAMESPACE = 'lifedrop'
+    }
 
     stages {
 
@@ -19,10 +27,14 @@ pipeline {
                     set -e
 
                     echo "Building Backend..."
-                    docker compose build backend
+                    docker build \
+                        -t "$BACKEND_IMAGE" \
+                        ./backend
 
                     echo "Building Frontend..."
-                    docker compose build frontend
+                    docker build \
+                        -t "$FRONTEND_IMAGE" \
+                        ./frontend
                 '''
             }
         }
@@ -39,15 +51,16 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "$DOCKER_PASSWORD" | docker login \
-                          -u "$DOCKER_USERNAME" \
-                          --password-stdin
+                        echo "$DOCKER_PASSWORD" | \
+                        docker login \
+                            -u "$DOCKER_USERNAME" \
+                            --password-stdin
 
                         echo "Pushing Backend..."
-                        docker push veeradockerhub/lifedrop-backend:latest
+                        docker push "$BACKEND_IMAGE"
 
                         echo "Pushing Frontend..."
-                        docker push veeradockerhub/lifedrop-frontend:latest
+                        docker push "$FRONTEND_IMAGE"
 
                         docker logout
                     '''
@@ -63,15 +76,36 @@ pipeline {
                     echo "Checking EKS access..."
                     kubectl get nodes
 
-                    echo "Deploying LifeDrop using Helm..."
+                    echo "Creating namespace..."
+                    kubectl create namespace "$NAMESPACE" \
+                        --dry-run=client -o yaml | kubectl apply -f -
 
-                    helm upgrade --install lifedrop k8s/lifedrop \
-                        --namespace lifedrop \
-                        --create-namespace \
-                        --wait \
-                        --timeout 10m
+                    echo "Applying Kubernetes manifests..."
+                    kubectl apply -f k8s/lifedrop/ -n "$NAMESPACE"
 
-                    echo "Helm deployment completed."
+                    echo "Restarting application deployments..."
+                    kubectl rollout restart deployment/lifedrop-backend \
+                        -n "$NAMESPACE"
+
+                    kubectl rollout restart deployment/lifedrop-frontend \
+                        -n "$NAMESPACE"
+
+                    kubectl rollout restart deployment/lifedrop-nginx \
+                        -n "$NAMESPACE"
+
+                    echo "Waiting for rollouts..."
+
+                    kubectl rollout status deployment/lifedrop-backend \
+                        -n "$NAMESPACE" \
+                        --timeout=5m
+
+                    kubectl rollout status deployment/lifedrop-frontend \
+                        -n "$NAMESPACE" \
+                        --timeout=5m
+
+                    kubectl rollout status deployment/lifedrop-nginx \
+                        -n "$NAMESPACE" \
+                        --timeout=5m
                 '''
             }
         }
@@ -79,31 +113,39 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 sh '''
-                    set -e
+                    echo "=============================="
+                    echo "Pods"
+                    echo "=============================="
 
-                    echo "Pods:"
-                    kubectl get pods -n lifedrop -o wide
+                    kubectl get pods -n "$NAMESPACE" -o wide
 
-                    echo ""
-                    echo "Services:"
-                    kubectl get svc -n lifedrop
+                    echo "=============================="
+                    echo "Services"
+                    echo "=============================="
 
-                    echo ""
-                    echo "Deployments:"
-                    kubectl get deployments -n lifedrop
+                    kubectl get svc -n "$NAMESPACE"
+
+                    echo "=============================="
+                    echo "Deployments"
+                    echo "=============================="
+
+                    kubectl get deployments -n "$NAMESPACE"
                 '''
             }
         }
     }
 
     post {
-
         success {
+            echo '======================================'
             echo 'LifeDrop EKS deployment SUCCESSFUL'
+            echo '======================================'
         }
 
         failure {
+            echo '======================================'
             echo 'LifeDrop EKS deployment FAILED'
+            echo '======================================'
         }
     }
 }
