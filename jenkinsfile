@@ -1,13 +1,20 @@
+```groovy
 pipeline {
     agent any
 
     environment {
-        DOCKER_USER = 'veeradockerhub'
+        AWS_REGION = 'ap-south-1'
 
-        BACKEND_IMAGE  = 'veeradockerhub/lifedrop-backend:latest'
-        FRONTEND_IMAGE = 'veeradockerhub/lifedrop-frontend:latest'
+        AWS_ACCOUNT_ID = '426714791148'
 
-        NAMESPACE = 'lifedrop'
+        ECR_BACKEND  = 'lifedrop-backend'
+        ECR_FRONTEND = 'lifedrop-frontend'
+
+        BACKEND_IMAGE = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${BUILD_NUMBER}"
+        FRONTEND_IMAGE = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}:${BUILD_NUMBER}"
+
+        S3_BUCKET = 'life_drop'
+        S3_PATH = "lifedrop/build-${BUILD_NUMBER}"
     }
 
     stages {
@@ -26,110 +33,173 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "Building Backend..."
+                    echo "Building Backend Image..."
+
                     docker build \
                         -t "$BACKEND_IMAGE" \
                         ./backend
 
-                    echo "Building Frontend..."
+                    echo "Building Frontend Image..."
+
                     docker build \
                         -t "$FRONTEND_IMAGE" \
                         ./frontend
+
+                    echo "Docker images created successfully."
+
+                    docker images
                 '''
             }
         }
 
-        stage('Push Docker Images') {
-            steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'dockerhub-creds',
-                        usernameVariable: 'DOCKER_USERNAME',
-                        passwordVariable: 'DOCKER_PASSWORD'
-                    )
-                ]) {
-                    sh '''
-                        set -e
-
-                        echo "$DOCKER_PASSWORD" | \
-                        docker login \
-                            -u "$DOCKER_USERNAME" \
-                            --password-stdin
-
-                        echo "Pushing Backend..."
-                        docker push "$BACKEND_IMAGE"
-
-                        echo "Pushing Frontend..."
-                        docker push "$FRONTEND_IMAGE"
-
-                        docker logout
-                    '''
-                }
-            }
-        }
-
-        stage('Deploy to EKS') {
+        stage('Trivy Security Scan') {
             steps {
                 sh '''
                     set -e
 
-                    echo "Checking EKS access..."
-                    kubectl get nodes
+                    echo "Scanning Backend Image..."
 
-                    echo "Creating namespace..."
-                    kubectl create namespace "$NAMESPACE" \
-                        --dry-run=client -o yaml | kubectl apply -f -
+                    trivy image \
+                        --severity HIGH,CRITICAL \
+                        --exit-code 1 \
+                        "$BACKEND_IMAGE"
 
-                    echo "Applying Kubernetes manifests..."
-                    kubectl apply -f k8s/lifedrop/ -n "$NAMESPACE"
+                    echo "Scanning Frontend Image..."
 
-                    echo "Restarting application deployments..."
-                    kubectl rollout restart deployment/lifedrop-backend \
-                        -n "$NAMESPACE"
+                    trivy image \
+                        --severity HIGH,CRITICAL \
+                        --exit-code 1 \
+                        "$FRONTEND_IMAGE"
 
-                    kubectl rollout restart deployment/lifedrop-frontend \
-                        -n "$NAMESPACE"
-
-                    kubectl rollout restart deployment/lifedrop-nginx \
-                        -n "$NAMESPACE"
-
-                    echo "Waiting for rollouts..."
-
-                    kubectl rollout status deployment/lifedrop-backend \
-                        -n "$NAMESPACE" \
-                        --timeout=5m
-
-                    kubectl rollout status deployment/lifedrop-frontend \
-                        -n "$NAMESPACE" \
-                        --timeout=5m
-
-                    kubectl rollout status deployment/lifedrop-nginx \
-                        -n "$NAMESPACE" \
-                        --timeout=5m
+                    echo "Trivy scan PASSED."
                 '''
             }
         }
 
-        stage('Verify Deployment') {
+        stage('Login to ECR') {
             steps {
                 sh '''
+                    set -e
+
+                    echo "Logging into AWS ECR..."
+
+                    aws ecr get-login-password \
+                        --region "$AWS_REGION" | \
+                    docker login \
+                        --username AWS \
+                        --password-stdin \
+                        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+                '''
+            }
+        }
+
+        stage('Push Images to ECR') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "Pushing Backend Image..."
+
+                    docker push "$BACKEND_IMAGE"
+
+                    echo "Pushing Frontend Image..."
+
+                    docker push "$FRONTEND_IMAGE"
+
+                    echo "Images successfully pushed to ECR."
+                '''
+            }
+        }
+
+        stage('Deploy to Docker') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "Stopping old application..."
+
+                    docker compose down || true
+
+                    echo "Pulling latest images from ECR..."
+
+                    docker pull "$BACKEND_IMAGE"
+                    docker pull "$FRONTEND_IMAGE"
+
+                    echo "Starting LifeDrop application..."
+
+                    docker compose up -d
+
+                    echo "Docker deployment completed."
+                '''
+            }
+        }
+
+        stage('Verify Docker Deployment') {
+            steps {
+                sh '''
+                    set -e
+
                     echo "=============================="
-                    echo "Pods"
+                    echo "Docker Containers"
                     echo "=============================="
 
-                    kubectl get pods -n "$NAMESPACE" -o wide
+                    docker ps
 
                     echo "=============================="
-                    echo "Services"
+                    echo "Container Health"
                     echo "=============================="
 
-                    kubectl get svc -n "$NAMESPACE"
+                    docker compose ps
 
                     echo "=============================="
-                    echo "Deployments"
+                    echo "Backend Image"
                     echo "=============================="
 
-                    kubectl get deployments -n "$NAMESPACE"
+                    docker images | grep lifedrop || true
+
+                    echo "Docker deployment verification completed."
+                '''
+            }
+        }
+
+        stage('Create Artifacts') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "Creating build artifacts..."
+
+                    mkdir -p artifacts
+
+                    tar -czf \
+                        "artifacts/lifedrop-build-${BUILD_NUMBER}.tar.gz" \
+                        backend \
+                        frontend \
+                        docker-compose.yml
+
+                    echo "Artifact created:"
+
+                    ls -lh artifacts/
+                '''
+            }
+        }
+
+        stage('Upload Artifacts to S3') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "Uploading artifacts to S3..."
+
+                    aws s3 cp artifacts/ \
+                        "s3://${S3_BUCKET}/${S3_PATH}/" \
+                        --recursive \
+                        --region "$AWS_REGION"
+
+                    echo "S3 upload completed successfully."
+
+                    echo "S3 Location:"
+                    echo "s3://${S3_BUCKET}/${S3_PATH}/"
                 '''
             }
         }
@@ -137,15 +207,29 @@ pipeline {
 
     post {
         success {
-            echo '======================================'
-            echo 'LifeDrop EKS deployment SUCCESSFUL'
-            echo '======================================'
+            echo '''
+            ==========================================
+            LifeDrop CI/CD PIPELINE SUCCESSFUL
+            ==========================================
+            Docker Build    : PASSED
+            Trivy Scan      : PASSED
+            ECR Push        : PASSED
+            Docker Deploy   : PASSED
+            Verification    : PASSED
+            S3 Artifact     : UPLOADED
+            ==========================================
+            '''
         }
 
         failure {
-            echo '======================================'
-            echo 'LifeDrop EKS deployment FAILED'
-            echo '======================================'
+            echo '''
+            ==========================================
+            LifeDrop CI/CD PIPELINE FAILED
+            ==========================================
+            Check the failed Jenkins stage and logs.
+            ==========================================
+            '''
         }
     }
 }
+```
