@@ -33,7 +33,7 @@ mongodb:
     port: 27017
   persistence:
     size: 5Gi
-    storageClass: gp3
+    storageClass: local-path
 
 nginx:
   replicaCount: 2
@@ -42,6 +42,6 @@ nginx:
     tag: "1.25-alpine"
     pullPolicy: IfNotPresent
   service:
-    type: LoadBalancer
+    type: ClusterIP
     port: 80
     targetPort: 80

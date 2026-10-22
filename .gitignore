@@ -1,0 +1,26 @@
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+kubeconfig
+kubeconfig.*
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+backend/node_modules/
+
+# Build outputs
+frontend/dist/
+dist/
+build/
+.next/
+
+# Logs and temporary files
+*.log
+logs/
+tmp/
+.DS_Store
