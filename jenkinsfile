@@ -152,7 +152,7 @@ pipeline {
                     docker compose ps
 
                     echo "=============================="
-                    echo "Backend Image"
+                    echo "Backend  Image"
                     echo "=============================="
 
                     docker images | grep lifedrop || true
